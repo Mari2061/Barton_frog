@@ -1,0 +1,509 @@
+---
+title: "Yumuri_code"
+author: "Mariam"
+date: "2024-07-26"
+output: html_document
+---
+
+```{r setup, include=FALSE }
+knitr::opts_chunk$set(echo = TRUE)
+#Change this to your working directory
+knitr::opts_knit$set(root.dir = "D:/02-Research/Baracoa/Paper/Code_Barton_Frog")
+```
+
+The following code is for the analysis of the data from the paper: “A soundscape approach for a short-term acoustic monitoring of a Critically Endangered Cuban frog”
+
+It is divided in Two parts:
+Part 1 : Call Rate data analysis
+Part 2 : Soundscape data analysis
+
+```{r packages, echo=FALSE}
+
+#Needed packages for data analysis and loading
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(pipeR)
+library(ggplot2)
+library(rstatix)
+library(dunn.test)
+library(writexl)
+library(gridExtra)
+library(ggstatsplot)
+library(statsExpressions)
+
+
+# Custom functions 
+
+format_pvalue <- function(pvalue, digits = 2) {
+  if (pvalue < 1e-300) {
+    return(" < 1e-300")
+  }
+  exponent <- floor(log10(pvalue))
+  rounded_value <- round(pvalue / 10^exponent, digits)
+  formatted_value <- sprintf("%.*fe%d", digits, rounded_value, exponent)
+  return(formatted_value)
+}
+
+```
+
+Part 1: Call Rate data analysis
+
+1.1 Raw call rate data loading and transformation
+
+```{r Data loading, echo=FALSE}
+
+#Loading the data
+call_set_raw <- read_xlsx("call_rate_barton_frog.xlsx")
+
+#Factoring the Period data
+call_set_raw$period_categorical <- factor(call_set_raw$period_categorical,levels = c("Dawn", "Morning", "Sunset", "Night","Late N"))
+#
+call_set_raw$UTC_hour <- as.POSIXct(call_set_raw$UTC_hour)
+
+```
+
+1.2 Total Calls
+Summary statistics regarding total calls
+
+```{r Total Calls}
+
+Total_Calls_site <- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(season_categorical,site_categorical) %>%
+  summarise(add_call = sum(total_calls_int, na.rm = TRUE))
+
+Total_Calls_season<- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(season_categorical) %>%
+  summarise(add_call = sum(total_calls_int, na.rm = TRUE))
+
+list_of_datasets_call <- list("Total_Call_Season" = Total_Calls_season,
+                         "Total_Call_Site" = Total_Calls_site)
+
+write_xlsx(list_of_datasets_call, "Total_Calls_summary_stats.xlsx")
+
+```
+
+Pie charts for the Total Calls
+
+```{r Pie_charts, echo = FALSE}
+
+piechart_total_calls <- ggplot(Total_Calls_site, aes(x = "", fill = season_categorical, weight = add_call)) +
+  geom_bar(width = 1, position = "fill") +
+  scale_fill_manual(values = c("#3F4788", "#81D34C","#1F9E89")) +
+  facet_wrap(~ site_categorical, nrow = 1) +
+  coord_polar("y", start = 0) +
+  labs(title = "Pie Charts of Behaviour by Variable and Season") +
+  theme_light() +
+  theme(
+    strip.text.x = element_text(margin = margin(2, 0, 2, 0)),
+    legend.position = "bottom",
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  ) 
+
+piechart_total_calls
+ 
+ggsave("Piecharts_callrate.svg", piechart_total_calls , units = "cm", height = 15, width = 30)
+
+```
+
+1.2 Data dsitribution visualization plots for the call rate
+
+```{r Visualization, echo=FALSE}
+
+#Plot of the call rate to get a hint of data distribution with no grouping per season 
+
+# Histogram
+ggplot(filter(call_set_raw, call_rate_callspermin > 0.0 ), aes(x = call_rate_callspermin)) +
+  geom_histogram()
+
+# Density plot
+ggplot(filter(call_set_raw, call_rate_callspermin > 0.0 ), aes(x = call_rate_callspermin)) +
+  geom_density()
+
+# QQ plot
+ggplot(filter(call_set_raw, call_rate_callspermin > 0), aes(sample = call_rate_callspermin)) +
+  geom_qq() + 
+  geom_qq_line() 
+
+# Assesing normality with a density plot and a qqplot for the data grouped by season zeros are removed from the distribution
+
+ggplot(filter(call_set_raw, call_rate_callspermin > 0), aes(x = call_rate_callspermin)) +
+  geom_density() + 
+  facet_wrap(~ season_categorical, scales = "free_y")
+
+ggplot(filter(call_set_raw, call_rate_callspermin > 0), aes(sample = call_rate_callspermin)) +
+  geom_qq() + 
+  geom_qq_line() + 
+  facet_wrap(~ season_categorical, scales = "free_y")
+
+
+#Normality test using Shapiro Wilks
+
+call_set_raw %>%
+  filter(call_rate_callspermin > 0) %>%
+  shapiro_test(call_rate_callspermin)
+
+
+#Plot of the call rate per season and time of the day  get a hint of seasonal and dayly patterns
+
+callrate_scatterplot <- ggplot(filter(call_set_raw, call_rate_callspermin > 0.0 ), aes(y = call_rate_callspermin, x = UTC_hour, color = season_categorical)) +
+  geom_point() +
+  scale_x_datetime(date_label = "%H:%M",
+                   breaks = "1 hour")
+
+```
+
+3.1.2 Call Rate Summary Stats
+
+```{r Call_rate_summary}
+
+# Call rate differences between Seasons
+
+Call_Rate_season<- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(season_categorical) %>%
+  get_summary_stats(call_rate_callspermin, type = "robust")
+
+Call_Rate_Site <- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(site_categorical) %>%
+  get_summary_stats(call_rate_callspermin, type = "robust")
+
+Call_Rate_Period <- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(period_categorical) %>%
+  get_summary_stats(call_rate_callspermin, type = "robust")
+
+Call_Rate_Period_Site <- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  group_by(site_categorical,period_categorical) %>%
+  get_summary_stats(call_rate_callspermin, type = "robust")
+
+#Summary just for the Sites in October
+Call_Rate_October_sites<- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) %>%
+  filter(season_categorical == "October") %>%
+  group_by(site_categorical) %>%
+  get_summary_stats(call_rate_callspermin, type = "robust")
+
+
+#Saving everything in the same excel
+
+list_of_datasets <- list("Call_Rate_Season" = Call_Rate_season, "Call_Rate_Site" = Call_Rate_Site,"Call_Rate_Period" = Call_Rate_Period, "Call_Rate_Period_Site" = Call_Rate_Period_Site,"Call_Rate_October_sites" = Call_Rate_October_sites)
+
+write_xlsx(list_of_datasets,"call_rate_summary_stats_robust.xlsx")
+
+# Call rate differences between Seasons
+
+```
+
+Dunn tests for the call rate
+
+```{r Dunn_test_CallRate}
+call_set_raw_dunn <- call_set_raw %>% 
+  filter(call_rate_callspermin > 0) 
+
+#Between Seasons
+dunn_table_season <- with(dunn.test(call_set_raw_dunn$call_rate_callspermin, call_set_raw_dunn$season_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+#Between Sites
+dunn_table_site <- with(dunn.test(call_set_raw_dunn$call_rate_callspermin, call_set_raw_dunn$site_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+#Between Periods
+dunn_table_period <- with(dunn.test(call_set_raw_dunn$call_rate_callspermin, call_set_raw_dunn$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+#Between Periods per site
+
+# Site # 1
+call_set_raw_dunn_1 <- call_set_raw_dunn %>% filter(site_categorical == 1)
+dunn_table_site1 <- with(dunn.test(call_set_raw_dunn_1$call_rate_callspermin, call_set_raw_dunn_1$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+
+# Site # 2
+call_set_raw_dunn_2 <- call_set_raw_dunn %>% filter(site_categorical == 2)
+dunn_table_site2 <- with(dunn.test(call_set_raw_dunn_2$call_rate_callspermin, call_set_raw_dunn_2$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+# Site # 3
+call_set_raw_dunn_3 <- call_set_raw_dunn %>% filter(site_categorical == 3)
+dunn_table_site3 <- with(dunn.test(call_set_raw_dunn_3$call_rate_callspermin, call_set_raw_dunn_3$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+# Site # 4
+call_set_raw_dunn_4 <- call_set_raw_dunn %>% filter(site_categorical == 4)
+dunn_table_site4 <- with(dunn.test(call_set_raw_dunn_4$call_rate_callspermin, call_set_raw_dunn_4$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+# Site # 5
+call_set_raw_dunn_5 <- call_set_raw_dunn %>% filter(site_categorical == 5)
+dunn_table_site5 <- with(dunn.test(call_set_raw_dunn_5$call_rate_callspermin, call_set_raw_dunn_5$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+# Filtering set just for October
+call_set_raw_October <- call_set_raw_dunn %>% 
+  filter(season_categorical == "October")
+
+# Differences in Sites just in October
+
+dunn_table_october <- with(dunn.test(call_set_raw_October$call_rate_callspermin, call_set_raw_October$site_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+
+dunn_period_october <- with(dunn.test(call_set_raw_October$call_rate_callspermin, call_set_raw_October$period_categorical, list = TRUE), cbind.data.frame(comparisons, Z, P.adjusted))
+
+
+list_of_dunn <- list("dunn_table_season" = dunn_table_season, "dunn_table_site" = dunn_table_site,"dunn_table_period" = dunn_table_period, "dunn_table_site2" = dunn_table_site2,
+                     "dunn_table_site3" = dunn_table_site3,
+                     "dunn_table_site4" = dunn_table_site4,
+                     "dunn_table_site5" = dunn_table_site5,
+                     "dunn_table_site1" = dunn_table_site1,
+                     "dunn_october_sites" = dunn_table_october,
+                     "dunn_period_october" = dunn_period_october)
+
+write_xlsx(list_of_dunn, "dunn_tables_callrate.xlsx")
+
+```
+
+Bar plots per site with descriptive statistics inside
+
+```{r Barplots Call Rate}
+# Define positions
+posn.d <- position_dodge(width = 0.1)
+posn.j <- position_jitter(width = 0.1)
+
+# Function to save range for use in ggplot
+gg_range <- function(x) {
+  data.frame(ymin = min(x), ymax = max(x))
+}
+
+# Function to save IQR around the median
+med_IQR <- function(x) {
+  data.frame(y = median(x), ymin = quantile(x)[2], ymax = quantile(x)[4])
+}
+
+# Function to create and return the plot for a given site
+create_plot_for_site <- function(data, site_number) {
+  # Kruskal-Wallis test
+  krus_call_site <- kruskal.test(call_rate_callspermin ~ period_categorical, data = filter(data, site_categorical == site_number))
+  
+  # Create the plot
+  plot <- ggplot(filter(data, site_categorical == site_number), aes(x = period_categorical, y = call_rate_callspermin, col =          as.factor(period_categorical), fill = as.factor(period_categorical))) +
+    geom_jitter(position = posn.j, size = 1) +
+    stat_summary(geom = "linerange", fun.data = med_IQR, position = posn.d, size = 4, alpha = 0.8) +
+    stat_summary(geom = "linerange", fun.data = gg_range, position = posn.d, size = 4, alpha = 0.4) +
+    stat_summary(geom = "point", fun = median, position = posn.d, size = 2, col = "#990000") +
+    scale_color_manual(values = c("#DDBABA","#3BAFAD","#385D9C","#382953","#231727")) +
+    ylab("Call Rate (calls/min)") +
+    xlab("Period of the day") +
+    coord_flip() +
+    theme_ggstatsplot() +
+    theme(panel.background = element_rect(fill = "white", color = "black"),
+          legend.position = "none",
+          panel.grid = element_blank(),
+          axis.text.y = element_blank(),
+          plot.subtitle = element_text(hjust = 0.5)) +
+    labs(subtitle = bquote(
+      paste(chi["Kruskal-Wallis"]^2 * "(" * 4 * ")" == .(krus_call_site$statistic), " , ",
+            italic("p"), "", " = ", .(format_pvalue(krus_call_site$p.value)), sep = "")), size = 10)
+  
+  return(plot)
+}
+
+# List to store plots for each site
+plots <- list()
+
+# Create plots for sites 1 to 5
+for (site in 1:5) {
+  plots[[site]] <- create_plot_for_site(call_set_raw_dunn, site)
+}
+
+# Arrange the plots in a grid
+site_bar_plot <- do.call(grid.arrange, c(plots, nrow = 1, ncol = 5))
+
+# Display ans save the plot grid
+site_bar_plot
+ggsave("siteindex_barplotv4.svg", site_bar_plot, units = "cm", height = 5, width = 35)
+
+```
+
+Part 2 Soundscape Analysis
+
+Acoustic indexes data loading and summary statistics
+
+```{r Summary_index}
+
+index_data<- read_xlsx("Acoustic_indexes_yumurí.xlsx")
+
+#Summary statistics by Site, Season, and focusing in October
+
+index_summary_site <- index_data %>% 
+  group_by(season_categorical,site_categorical) %>%
+  get_summary_stats(c(ACI_index,ADI_index,H_index, M_index, AEI_index, NSDI_index,NP_index), type = "robust")
+
+index_summary_season <- index_data %>% 
+  group_by(season_categorical) %>%
+  get_summary_stats(c(ACI_index,ADI_index,H_index, M_index, AEI_index, NSDI_index,NP_index), type = "robust")
+
+index_summary_octubre <- index_data %>% 
+  filter(season_categorical == "October") %>%
+  group_by(site_categorical) %>%
+  get_summary_stats(c(ACI_index,ADI_index,H_index, M_index, AEI_index, NSDI_index,NP_index), type = "robust")
+
+
+list_of_index <- list("index_summary_site" = index_summary_site, "index_summary_season" = index_summary_season, "index_sumary_octubre" = index_summary_octubre)
+
+write_xlsx(list_of_index, "indexes_summary_stats_robust.xlsx")
+
+```
+
+Ploting indexes differences between Seasons
+
+```{r Season_index, echo = FALSE}
+# Define the indexes to iterate over
+indexes <- c("ACI_index", "H_index", "M_index", "NSDI_index", "ADI_index", "NP_index", "AEI_index")
+index_labels <- c("ACI index", "H index", "M index", "NSDI index", "ADI index", "NP index", "AEI index")
+names(index_labels) <- indexes
+
+color_values <- c("#3F4788", "#81D34C", "#1F9E89")
+# Create an empty list to store the plots
+plots <- list()
+
+# Loop through each index to create the Kruskal-Wallis test results and plots
+for (index in indexes) {
+  # Perform the Kruskal-Wallis test
+  kruskal_results <- kruskal.test(reformulate("season_categorical", response = index), data = index_data)
+  p_value <- format_pvalue(kruskal_results$p.value)
+  statistic <- kruskal_results$statistic
+  
+  # Create the plot using ggbetweenstats
+  plot <- ggbetweenstats(
+    data = index_data, 
+    x = season_categorical, 
+    y = !!sym(index), 
+    type = "nonparametric",
+    centrality.point.args = list(size = 1, color = "#484848"),
+    centrality.label.args = list(size = 2.5, nudge_x = 0.4, nudge_y = 0),
+    ggsignif.args = list(textsize = 2.5, tip_length = 0.01, na.rm = TRUE),
+    ylab = index_labels[[index]],
+    results.subtitle = FALSE,
+    p.adjust.method = "none",
+    pairwise.display = "significant",
+  ) + 
+    scale_color_manual(values = color_values) +
+    theme(
+    plot.subtitle = element_text(hjust = 0.5, size = 8),
+    axis.title.y.right = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.y.right = element_blank(),
+    axis.ticks.y.right = element_blank()
+  ) + labs(
+    subtitle = bquote(
+      paste(chi["Kruskal-Wallis"]^2 * "(" * 4 * ")" == .(statistic), " ,",
+      italic("p"), "", " = ", .(p_value), sep = " ")
+    )
+  )
+  
+  # Store the plot in the list
+  plots[[index]] <- plot
+}
+
+# Arrange the plots in a grid
+indexes_plot <- do.call(grid.arrange, c(plots, nrow = 4, ncol = 2))
+
+# Save the combined plot to a file
+ggsave("season_index_boxplot_stats_high_2.png", indexes_plot, units = "cm", height = 36, width = 28, dpi = 300)
+
+
+```
+
+Plot indexes differences between Sites
+
+```{r Site Index, echo=FALSE}
+
+# Create an empty list to store the plots
+plots <- list()
+
+# Loop through each index to create the Kruskal-Wallis test results and plots
+for (index in indexes) {
+  # Perform the Kruskal-Wallis test
+  kruskal_results <- kruskal.test(reformulate("site_categorical", response = index), data = filter(index_data, season_categorical == "October"))
+  p_value <- format_pvalue(kruskal_results$p.value)
+  statistic <- kruskal_results$statistic
+  
+  # Create the plot using ggbetweenstats
+  plot <- ggbetweenstats(
+    data = filter(index_data, season_categorical == "October"), 
+    x = site_categorical, 
+    y = !!sym(index), 
+    type = "nonparametric",
+    centrality.point.args = list(size = 1, color = "#484848"),
+    centrality.label.args = list(size = 2.5, nudge_x = 0.4, nudge_y = 0),
+    ggsignif.args = list(textsize = 2.5, tip_length = 0.01, na.rm = TRUE),
+    ylab = index_labels[[index]],
+    results.subtitle = FALSE,
+    p.adjust.method = "none",
+    pairwise.display = "non-significant",
+    point.args = list(color = "#E7861B")
+  ) + theme(
+    plot.subtitle = element_text(hjust = 0.5, size = 8),
+    axis.title.y.right = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.y.right = element_blank(),
+    axis.ticks.y.right = element_blank()
+  ) + labs(
+    subtitle = bquote(
+      paste(chi["Kruskal-Wallis"]^2 * "(" * 4 * ")" == .(statistic), " ,",
+      italic("p"), "", " = ", .(p_value), sep = " ")
+    )
+  )
+  
+  # Store the plot in the list
+  plots[[index]] <- plot
+}
+
+# Arrange the plots in a grid
+site_indexes_plot <- do.call(grid.arrange, c(plots, nrow = 4, ncol = 2))
+
+# Save the combined plot to a file
+ggsave("siteindex_boxplot_stats_high_2.png", site_indexes_plot, units = "cm", height = 36, width = 30, dpi = 300)
+
+
+```
+
+Compute mean spectrogram plots
+
+```{r Mean Spectrograms, echo =FALSE}
+
+# Read and transform the mean spectrogram data
+Average_Meanspec <- read_xlsx("Average_MeanSpec_Yumuri.xlsx")
+Filter_Spectro <- Average_Meanspec %>% 
+  filter(freq_x >= 2 & freq_x <= 5)
+Filter_Spectro$period_categorical <- factor(Filter_Spectro$period_categorical,
+                                      levels = c("Morning 5:00 - 6:00", 
+                                                 "Sunset 18:00 - 19:00", 
+                                                 "Dusk 00:00 - 1:00"))
+# Plot the mean spectrogram 
+meanspec <- ggplot(data = Filter_Spectro,
+       aes(x = freq_x, y = ave_relativeamp, colour = factor(season_categorical), group = season_categorical)) +
+  scale_color_viridis_d() +
+  scale_color_manual(values = c("#3F4788", "#81D34C","#1F9E89"))+
+  scale_x_continuous(breaks = round(seq(min(Average_Meanspec$freq_x), max(Average_Meanspec$freq_x), by = 0.5),10)) +
+  geom_vline(xintercept = 3.8, linetype = "dashed", color = "black") +
+  facet_grid(cols = vars(site_categorical),rows = vars(period_categorical)) +
+  theme_light() +
+  theme(
+    strip.text.x = element_text(margin = margin(2, 0, 2, 0)),
+    legend.position = "bottom",
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(colour = "black")
+  ) +
+  labs(y = "Relative Amplitude", x = "Frecuency (kHz)",color='Season') + 
+  geom_line(aes(colour = factor(season_categorical))) 
+
+meanspec
+
+
+ggsave("mean_freq_allseason_.png", meanspec , units = "cm", height = 15, width = 30, dpi = 600)
+
+```
+
